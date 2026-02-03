@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Delivery Verification</string>
+
+    <!-- Login -->
+    <string name="login_title">DHIS2 Login</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="server_url">Server URL</string>
+    <string name="login">Login</string>
+    <string name="remember_credentials">Remember credentials</string>
+
+    <!-- Routes -->
+    <string name="routes_title">My Routes</string>
+    <string name="route_details">Route Details</string>
+    <string name="no_routes">No routes available</string>
+    <string name="pull_to_refresh">Pull to refresh</string>
+
+    <!-- Delivery -->
+    <string name="delivery_verification">Delivery Verification</string>
+    <string name="facility_name">Facility</string>
+    <string name="gps_status">GPS Status</string>
+    <string name="distance_from_target">Distance from target</string>
+    <string name="order_volume">Order Volume</string>
+    <string name="order_weight">Order Weight (kg)</string>
+    <string name="actual_volume">Actual Volume</string>
+    <string name="actual_weight">Actual Weight (kg)</string>
+    <string name="comments">Comments (Optional)</string>
+    <string name="capture_signature">Capture Signature</string>
+    <string name="take_photo">Take Photo</string>
+    <string name="complete_delivery">Complete Delivery</string>
+
+    <!-- GPS Status -->
+    <string name="gps_searching">Searching for GPS…</string>
+    <string name="gps_locked">GPS Locked</string>
+    <string name="gps_accurate">GPS Accurate</string>
+    <string name="gps_poor_accuracy">Poor GPS accuracy</string>
+
+    <!-- Sync -->
+    <string name="sync_title">Synchronization</string>
+    <string name="sync_now">Sync Now</string>
+    <string name="pending_verifications">Pending Verifications</string>
+    <string name="sync_status_synced">Synced</string>
+    <string name="sync_status_pending">Pending</string>
+    <string name="sync_status_failed">Failed</string>
+
+    <!-- Errors -->
+    <string name="error_login_failed">Login failed. Please check credentials.</string>
+    <string name="error_network">Network error. Please try again.</string>
+    <string name="error_gps_permission">GPS permission required</string>
+    <string name="error_camera_permission">Camera permission required</string>
+    <string name="error_location_accuracy">Location accuracy too low</string>
+    <string name="error_distance_too_far">Too far from delivery location</string>
+
+    <!-- Permissions -->
+    <string name="permission_location_rationale">Location permission is required to verify deliveries</string>
+    <string name="permission_camera_rationale">Camera permission is required to capture delivery photos</string>
+</resources>
