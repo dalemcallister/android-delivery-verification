@@ -2,13 +2,14 @@ package com.connexi.deliveryverification.data.repository
 
 import com.connexi.deliveryverification.data.local.AppDatabase
 import com.connexi.deliveryverification.data.local.entities.*
-import com.connexi.deliveryverification.data.remote.dto.EventsListResponse
+import com.connexi.deliveryverification.data.remote.EventsListResponse
 import com.connexi.deliveryverification.domain.model.Delivery
 import com.connexi.deliveryverification.domain.model.Route
 import com.connexi.deliveryverification.util.LocationUtils
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
 import java.util.*
@@ -30,11 +31,9 @@ class RouteRepository @Inject constructor(
     fun getRoutes(): Flow<List<Route>> {
         return routeDao.getAllRoutes().map { routeEntities ->
             routeEntities.map { entity ->
-                val deliveries = deliveryDao.getDeliveriesByRoute(entity.id)
-                    .map { deliveryEntities ->
-                        deliveryEntities.map { it.toDomain() }
-                    }
-                entity.toDomain(deliveries.map { emptyList() }.first())
+                // Return routes without deliveries for list view
+                // Use getRouteById() to get full details with deliveries
+                entity.toDomain(emptyList())
             }
         }
     }
@@ -43,40 +42,105 @@ class RouteRepository @Inject constructor(
      * Get route by ID with deliveries
      */
     fun getRouteById(routeId: String): Flow<Route?> {
+        Timber.d("getRouteById called with routeId: $routeId")
         return routeDao.getRouteById(routeId).combine(
             deliveryDao.getDeliveriesByRoute(routeId)
         ) { routeEntity, deliveryEntities ->
+            Timber.d("RouteEntity: ${routeEntity?.id}, ${routeEntity?.routeId}")
+            Timber.d("Delivery entities count: ${deliveryEntities.size}")
+            deliveryEntities.forEach { delivery ->
+                Timber.d("  - Delivery entity: ${delivery.facilityName}, routeId=${delivery.routeId}")
+            }
             routeEntity?.toDomain(deliveryEntities.map { it.toDomain() })
         }
     }
 
     /**
-     * Fetch routes from DHIS2 server
+     * Fetch routes from DHIS2 server (from data values)
      */
     suspend fun fetchRoutesFromRemote(): Result<List<Route>> {
         return try {
             val service = authRepository.getDHIS2Service()
                 ?: return Result.failure(Exception("Not logged in"))
 
-            // TODO: Replace with actual program ID from DHIS2
-            // This should fetch events from "Route Assignment Program"
-            val programId = "ROUTE_PROGRAM_ID" // Placeholder
-            val response = service.getEvents(
-                programId = programId,
-                ouMode = "ACCESSIBLE"
+            // Data element UIDs for route information
+            val ROUTE_ID_DE = "kLPeW2Yx9Zy"
+            val ROUTE_DETAILS_DE = "nBv8JxPq1Rs"
+            val ROUTE_STATUS_DE = "pYzQ3Wm8Ktx"
+            val VEHICLE_TYPE_DE = "mXc7V2Np5Wq"
+
+            // Get current period (YYYYMM format)
+            val calendar = Calendar.getInstance()
+            val year = calendar.get(Calendar.YEAR)
+            val month = String.format("%02d", calendar.get(Calendar.MONTH) + 1)
+            val period = "$year$month"
+
+            // Fetch data values for route information
+            val response = service.getDataValueSets(
+                dataElements = "$ROUTE_ID_DE,$ROUTE_DETAILS_DE,$ROUTE_STATUS_DE,$VEHICLE_TYPE_DE",
+                period = period,
+                orgUnitMode = "ACCESSIBLE"
             )
 
             if (response.isSuccessful) {
-                val events = response.body()?.events ?: emptyList()
-                val routes = parseRoutesFromEvents(events)
+                val dataValues = response.body()?.dataValues ?: emptyList()
+                Timber.d("Fetched ${dataValues.size} data values")
 
-                // Save to local database
-                routes.forEach { route ->
-                    val routeEntity = route.toEntity()
-                    routeDao.insertRoute(routeEntity)
+                // Group data values by orgUnit to reconstruct routes
+                val routesByOrgUnit = dataValues.groupBy { it.orgUnit }
 
-                    val deliveryEntities = route.deliveries.map { it.toEntity() }
-                    deliveryDao.insertDeliveries(deliveryEntities)
+                val routes = mutableListOf<Route>()
+
+                routesByOrgUnit.forEach { (orgUnit, values) ->
+                    // Group values by some identifier (since we may have multiple routes per orgUnit)
+                    // For simplicity, we'll assume each route is stored with unique timestamps
+                    val routeDetailsValues = values.filter { it.dataElement == ROUTE_DETAILS_DE }
+
+                    routeDetailsValues.forEach { detailValue ->
+                        try {
+                            // Parse route details JSON
+                            val routeData = gson.fromJson(detailValue.value, RouteData::class.java)
+
+                            val route = Route(
+                                id = UUID.randomUUID().toString(),
+                                routeId = routeData.routeId,
+                                vehicleType = routeData.vehicleType,
+                                totalStops = routeData.totalStops,
+                                totalDistance = routeData.totalDistance,
+                                totalVolume = routeData.totalVolume,
+                                totalWeight = routeData.totalWeight,
+                                status = RouteStatus.PENDING,
+                                syncStatus = SyncStatus.SYNCED,
+                                createdAt = System.currentTimeMillis(),
+                                deliveries = routeData.stops.map { stop ->
+                                    Delivery(
+                                        id = UUID.randomUUID().toString(),
+                                        routeId = routeData.routeId,
+                                        facilityId = stop.facilityId,
+                                        facilityName = stop.facilityName,
+                                        latitude = stop.latitude,
+                                        longitude = stop.longitude,
+                                        orderVolume = stop.orderVolume,
+                                        orderWeight = stop.orderWeight,
+                                        stopNumber = stop.stopNumber,
+                                        distanceFromPrevious = stop.distanceFromPrevious,
+                                        status = DeliveryStatus.PENDING,
+                                        syncStatus = SyncStatus.SYNCED
+                                    )
+                                }
+                            )
+
+                            routes.add(route)
+
+                            // Save to local database
+                            routeDao.insertRoute(route.toEntity())
+                            val deliveryEntities = route.deliveries.map { it.toEntity() }
+                            deliveryDao.insertDeliveries(deliveryEntities)
+
+                        } catch (e: Exception) {
+                            Timber.e(e, "Failed to parse route from data value")
+                        }
+                    }
                 }
 
                 Timber.d("Fetched ${routes.size} routes from DHIS2")
@@ -158,6 +222,17 @@ class RouteRepository @Inject constructor(
         }
     }
 
+    private data class RouteData(
+        val routeId: String,
+        val vehicleType: String,
+        val totalStops: Int,
+        val totalDistance: Float,
+        val totalVolume: Float,
+        val totalWeight: Float,
+        val totalCost: Float,
+        val stops: List<StopData>
+    )
+
     private data class StopData(
         val facilityId: String,
         val facilityName: String,
@@ -166,8 +241,168 @@ class RouteRepository @Inject constructor(
         val orderVolume: Float,
         val orderWeight: Float,
         val stopNumber: Int,
-        val distanceFromPrevious: Float
+        val distanceFromPrevious: Float,
+        val arrivalTime: String? = null
     )
+
+    /**
+     * Load mock data for testing
+     */
+    suspend fun loadMockData() {
+        try {
+            // Check if we already have data
+            val existingRoutes = routeDao.getAllRoutes().map { it.size }.first()
+            if (existingRoutes > 0) {
+                Timber.d("Mock data already loaded")
+                return
+            }
+
+            Timber.d("Loading mock data...")
+
+            // Mock Route 1: Nairobi City Route
+            val route1Id = "ROUTE-001"
+            val route1 = Route(
+                id = route1Id,
+                routeId = route1Id,
+                vehicleType = "TRUCK",
+                totalStops = 4,
+                totalDistance = 15000f, // 15km
+                totalVolume = 800f,
+                totalWeight = 3200f,
+                status = RouteStatus.PENDING,
+                syncStatus = SyncStatus.SYNCED,
+                createdAt = System.currentTimeMillis(),
+                deliveries = listOf(
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route1Id,
+                        facilityId = "facility-001",
+                        facilityName = "Kenyatta National Hospital",
+                        latitude = -1.3018,
+                        longitude = 36.8073,
+                        orderVolume = 200f,
+                        orderWeight = 800f,
+                        stopNumber = 1,
+                        distanceFromPrevious = 0f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    ),
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route1Id,
+                        facilityId = "facility-002",
+                        facilityName = "Nairobi South Hospital",
+                        latitude = -1.3142,
+                        longitude = 36.8472,
+                        orderVolume = 150f,
+                        orderWeight = 600f,
+                        stopNumber = 2,
+                        distanceFromPrevious = 4200f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    ),
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route1Id,
+                        facilityId = "facility-003",
+                        facilityName = "Mbagathi District Hospital",
+                        latitude = -1.3281,
+                        longitude = 36.7981,
+                        orderVolume = 250f,
+                        orderWeight = 1000f,
+                        stopNumber = 3,
+                        distanceFromPrevious = 5500f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    ),
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route1Id,
+                        facilityId = "facility-004",
+                        facilityName = "Karen Hospital",
+                        latitude = -1.3231,
+                        longitude = 36.7020,
+                        orderVolume = 200f,
+                        orderWeight = 800f,
+                        stopNumber = 4,
+                        distanceFromPrevious = 5300f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    )
+                )
+            )
+
+            // Mock Route 2: Westlands Route
+            val route2Id = "ROUTE-002"
+            val route2 = Route(
+                id = route2Id,
+                routeId = route2Id,
+                vehicleType = "VAN",
+                totalStops = 3,
+                totalDistance = 8500f, // 8.5km
+                totalVolume = 450f,
+                totalWeight = 1800f,
+                status = RouteStatus.PENDING,
+                syncStatus = SyncStatus.SYNCED,
+                createdAt = System.currentTimeMillis(),
+                deliveries = listOf(
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route2Id,
+                        facilityId = "facility-005",
+                        facilityName = "Aga Khan Hospital",
+                        latitude = -1.2673,
+                        longitude = 36.8078,
+                        orderVolume = 150f,
+                        orderWeight = 600f,
+                        stopNumber = 1,
+                        distanceFromPrevious = 0f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    ),
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route2Id,
+                        facilityId = "facility-006",
+                        facilityName = "Westlands Health Centre",
+                        latitude = -1.2676,
+                        longitude = 36.8062,
+                        orderVolume = 100f,
+                        orderWeight = 400f,
+                        stopNumber = 2,
+                        distanceFromPrevious = 3000f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    ),
+                    Delivery(
+                        id = UUID.randomUUID().toString(),
+                        routeId = route2Id,
+                        facilityId = "facility-007",
+                        facilityName = "Parklands Health Clinic",
+                        latitude = -1.2631,
+                        longitude = 36.8241,
+                        orderVolume = 200f,
+                        orderWeight = 800f,
+                        stopNumber = 3,
+                        distanceFromPrevious = 5500f,
+                        status = DeliveryStatus.PENDING,
+                        syncStatus = SyncStatus.SYNCED
+                    )
+                )
+            )
+
+            // Save routes to database
+            routeDao.insertRoute(route1.toEntity())
+            deliveryDao.insertDeliveries(route1.deliveries.map { it.toEntity() })
+
+            routeDao.insertRoute(route2.toEntity())
+            deliveryDao.insertDeliveries(route2.deliveries.map { it.toEntity() })
+
+            Timber.d("Mock data loaded: 2 routes with ${route1.deliveries.size + route2.deliveries.size} deliveries")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load mock data")
+        }
+    }
 }
 
 // Extension functions for mapping

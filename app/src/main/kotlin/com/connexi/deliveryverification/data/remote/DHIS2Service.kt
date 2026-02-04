@@ -1,6 +1,7 @@
 package com.connexi.deliveryverification.data.remote
 
 import com.connexi.deliveryverification.data.remote.dto.*
+import com.google.gson.annotations.SerializedName
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -52,6 +53,15 @@ interface DHIS2Service {
     suspend fun createEvents(
         @Body events: EventsWrapper
     ): Response<EventsResponse>
+
+    @GET("api/dataValueSets")
+    suspend fun getDataValueSets(
+        @Query("dataElement") dataElements: String,
+        @Query("period") period: String,
+        @Query("orgUnit") orgUnit: String? = null,
+        @Query("orgUnitMode") orgUnitMode: String? = null,
+        @Query("children") children: Boolean = true
+    ): Response<DataValueSetsResponse>
 }
 
 data class EventsListResponse(
@@ -62,4 +72,34 @@ data class EventsListResponse(
 data class EventsWrapper(
     @SerializedName("events")
     val events: List<EventDto>
+)
+
+data class DataValueSetsResponse(
+    @SerializedName("dataValues")
+    val dataValues: List<DataValue>
+)
+
+data class DataValue(
+    @SerializedName("dataElement")
+    val dataElement: String,
+    @SerializedName("period")
+    val period: String,
+    @SerializedName("orgUnit")
+    val orgUnit: String,
+    @SerializedName("categoryOptionCombo")
+    val categoryOptionCombo: String? = null,
+    @SerializedName("attributeOptionCombo")
+    val attributeOptionCombo: String? = null,
+    @SerializedName("value")
+    val value: String,
+    @SerializedName("storedBy")
+    val storedBy: String? = null,
+    @SerializedName("created")
+    val created: String? = null,
+    @SerializedName("lastUpdated")
+    val lastUpdated: String? = null,
+    @SerializedName("comment")
+    val comment: String? = null,
+    @SerializedName("followup")
+    val followup: Boolean? = null
 )

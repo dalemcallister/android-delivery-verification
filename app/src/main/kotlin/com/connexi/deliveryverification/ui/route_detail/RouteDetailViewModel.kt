@@ -33,14 +33,20 @@ class RouteDetailViewModel @Inject constructor(
 
     private fun loadRoute() {
         viewModelScope.launch {
+            timber.log.Timber.d("Loading route with ID: $routeId")
             fetchRoutesUseCase.getRouteById(routeId)
                 .catch { e ->
+                    timber.log.Timber.e(e, "Error loading route")
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         error = e.message
                     )
                 }
                 .collect { route ->
+                    timber.log.Timber.d("Loaded route: ${route?.routeId}, deliveries count: ${route?.deliveries?.size}")
+                    route?.deliveries?.forEachIndexed { index, delivery ->
+                        timber.log.Timber.d("  Delivery $index: ${delivery.facilityName}, routeId=${delivery.routeId}, id=${delivery.id}")
+                    }
                     _uiState.value = _uiState.value.copy(
                         route = route,
                         isLoading = false

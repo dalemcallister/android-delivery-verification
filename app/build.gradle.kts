@@ -22,8 +22,8 @@ android {
         }
 
         // DHIS2 default configuration
-        buildConfigField("String", "DEFAULT_DHIS2_URL", "\"http://10.0.2.2:8080\"")
-        buildConfigField("String", "DEFAULT_DRO_URL", "\"http://10.0.2.2:8000\"")
+        buildConfigField("String", "DEFAULT_DHIS2_URL", "\"http://192.168.88.9:8080\"")
+        buildConfigField("String", "DEFAULT_DRO_URL", "\"http://192.168.88.9:8000\"")
     }
 
     buildTypes {
