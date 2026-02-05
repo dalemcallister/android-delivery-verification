@@ -2,7 +2,9 @@ package com.connexi.deliveryverification.ui.routes
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.connexi.deliveryverification.data.repository.AuthRepository
 import com.connexi.deliveryverification.data.repository.RouteRepository
+import com.connexi.deliveryverification.domain.model.DriverProfile
 import com.connexi.deliveryverification.domain.model.Route
 import com.connexi.deliveryverification.domain.usecase.FetchRoutesUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,6 +15,7 @@ import javax.inject.Inject
 
 data class RoutesUiState(
     val routes: List<Route> = emptyList(),
+    val driverProfile: DriverProfile? = null,
     val isLoading: Boolean = false,
     val error: String? = null
 )
@@ -20,20 +23,25 @@ data class RoutesUiState(
 @HiltViewModel
 class RoutesViewModel @Inject constructor(
     private val fetchRoutesUseCase: FetchRoutesUseCase,
-    private val routeRepository: RouteRepository
+    private val routeRepository: RouteRepository,
+    private val authRepository: AuthRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoutesUiState())
     val uiState: StateFlow<RoutesUiState> = _uiState.asStateFlow()
 
     init {
-        loadMockData()
+        loadDriverProfile()
         loadLocalRoutes()
+        // Auto-refresh from DHIS2 on startup
+        refreshRoutes()
     }
 
-    private fun loadMockData() {
+    private fun loadDriverProfile() {
         viewModelScope.launch {
-            routeRepository.loadMockData()
+            val profile = authRepository.getDriverProfile()
+            _uiState.value = _uiState.value.copy(driverProfile = profile)
+            Timber.d("Driver profile loaded: ${profile?.driverName} - Truck: ${profile?.assignedTruckName}")
         }
     }
 
@@ -54,22 +62,13 @@ class RoutesViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
-            // For now, just reload mock data
-            // TODO: Implement real DHIS2 route fetching after creating data elements
-            Timber.d("Refreshing routes (using mock data)")
-            routeRepository.loadMockData()
+            Timber.d("Fetching routes from DHIS2 for driver: ${_uiState.value.driverProfile?.driverName}")
 
-            _uiState.value = _uiState.value.copy(
-                isLoading = false,
-                error = null
-            )
-
-            // Uncomment below when DHIS2 data elements are set up:
-            /*
             val result = fetchRoutesUseCase.fetchFromRemote()
 
             if (result.isSuccess) {
-                Timber.d("Routes refreshed successfully")
+                val fetchedRoutes = result.getOrNull() ?: emptyList()
+                Timber.d("Routes refreshed successfully: ${fetchedRoutes.size} routes")
                 _uiState.value = _uiState.value.copy(isLoading = false)
             } else {
                 Timber.e("Failed to refresh routes: ${result.exceptionOrNull()?.message}")
@@ -78,7 +77,6 @@ class RoutesViewModel @Inject constructor(
                     error = result.exceptionOrNull()?.message ?: "Failed to fetch routes"
                 )
             }
-            */
         }
     }
 }

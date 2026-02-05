@@ -56,94 +56,97 @@ class RouteRepository @Inject constructor(
     }
 
     /**
-     * Fetch routes from DHIS2 server (from data values)
+     * Fetch routes from DHIS2 server (filtered by driver's assigned truck)
      */
     suspend fun fetchRoutesFromRemote(): Result<List<Route>> {
         return try {
             val service = authRepository.getDHIS2Service()
                 ?: return Result.failure(Exception("Not logged in"))
 
-            // Data element UIDs for route information
+            // Get driver's assigned truck orgUnit
+            val assignedTruckId = authRepository.getAssignedTruckId()
+            if (assignedTruckId == null) {
+                Timber.w("Driver has no assigned truck, fetching all accessible routes")
+            } else {
+                Timber.d("Fetching routes for truck: $assignedTruckId")
+            }
+
+            // Data element UIDs for route information (from DHIS2 Route Assignment Program)
+            val PROGRAM_ID = "nnYQNh2XW8m"  // Route Assignment Program 1
             val ROUTE_ID_DE = "kLPeW2Yx9Zy"
             val ROUTE_DETAILS_DE = "nBv8JxPq1Rs"
-            val ROUTE_STATUS_DE = "pYzQ3Wm8Ktx"
             val VEHICLE_TYPE_DE = "mXc7V2Np5Wq"
 
-            // Get current period (YYYYMM format)
-            val calendar = Calendar.getInstance()
-            val year = calendar.get(Calendar.YEAR)
-            val month = String.format("%02d", calendar.get(Calendar.MONTH) + 1)
-            val period = "$year$month"
-
-            // Fetch data values for route information
-            val response = service.getDataValueSets(
-                dataElements = "$ROUTE_ID_DE,$ROUTE_DETAILS_DE,$ROUTE_STATUS_DE,$VEHICLE_TYPE_DE",
-                period = period,
-                orgUnitMode = "ACCESSIBLE"
+            // Fetch events from Route Assignment Program
+            // If driver has assigned truck, filter by that orgUnit
+            val response = service.getEvents(
+                programId = PROGRAM_ID,
+                orgUnitId = assignedTruckId,  // Will be null if no truck assigned
+                ouMode = if (assignedTruckId != null) "SELECTED" else "ACCESSIBLE"
             )
 
             if (response.isSuccessful) {
-                val dataValues = response.body()?.dataValues ?: emptyList()
-                Timber.d("Fetched ${dataValues.size} data values")
+                val events = response.body()?.events ?: emptyList()
+                Timber.d("Fetched ${events.size} route events from DHIS2")
 
-                // Group data values by orgUnit to reconstruct routes
-                val routesByOrgUnit = dataValues.groupBy { it.orgUnit }
-
-                val routes = mutableListOf<Route>()
-
-                routesByOrgUnit.forEach { (orgUnit, values) ->
-                    // Group values by some identifier (since we may have multiple routes per orgUnit)
-                    // For simplicity, we'll assume each route is stored with unique timestamps
-                    val routeDetailsValues = values.filter { it.dataElement == ROUTE_DETAILS_DE }
-
-                    routeDetailsValues.forEach { detailValue ->
-                        try {
-                            // Parse route details JSON
-                            val routeData = gson.fromJson(detailValue.value, RouteData::class.java)
-
-                            val route = Route(
-                                id = UUID.randomUUID().toString(),
-                                routeId = routeData.routeId,
-                                vehicleType = routeData.vehicleType,
-                                totalStops = routeData.totalStops,
-                                totalDistance = routeData.totalDistance,
-                                totalVolume = routeData.totalVolume,
-                                totalWeight = routeData.totalWeight,
-                                status = RouteStatus.PENDING,
-                                syncStatus = SyncStatus.SYNCED,
-                                createdAt = System.currentTimeMillis(),
-                                deliveries = routeData.stops.map { stop ->
-                                    Delivery(
-                                        id = UUID.randomUUID().toString(),
-                                        routeId = routeData.routeId,
-                                        facilityId = stop.facilityId,
-                                        facilityName = stop.facilityName,
-                                        latitude = stop.latitude,
-                                        longitude = stop.longitude,
-                                        orderVolume = stop.orderVolume,
-                                        orderWeight = stop.orderWeight,
-                                        stopNumber = stop.stopNumber,
-                                        distanceFromPrevious = stop.distanceFromPrevious,
-                                        status = DeliveryStatus.PENDING,
-                                        syncStatus = SyncStatus.SYNCED
-                                    )
-                                }
-                            )
-
-                            routes.add(route)
-
-                            // Save to local database
-                            routeDao.insertRoute(route.toEntity())
-                            val deliveryEntities = route.deliveries.map { it.toEntity() }
-                            deliveryDao.insertDeliveries(deliveryEntities)
-
-                        } catch (e: Exception) {
-                            Timber.e(e, "Failed to parse route from data value")
+                val routes = events.mapNotNull { event ->
+                    try {
+                        // Get data values from event
+                        val dataValuesMap = event.dataValues.associate {
+                            it.dataElement to it.value
                         }
+
+                        // Extract route details JSON
+                        val routeDetailsJson = dataValuesMap[ROUTE_DETAILS_DE]
+                            ?: return@mapNotNull null
+
+                        // Parse route data
+                        val routeData = gson.fromJson(routeDetailsJson, RouteData::class.java)
+
+                        // Create route with consistent ID
+                        val routeId = routeData.routeId
+                        Route(
+                            id = routeId,
+                            routeId = routeId,
+                            vehicleType = routeData.vehicleType,
+                            totalStops = routeData.stops.size,
+                            totalDistance = routeData.totalDistance,
+                            totalVolume = routeData.totalVolume,
+                            totalWeight = routeData.totalWeight,
+                            status = RouteStatus.PENDING,
+                            syncStatus = SyncStatus.SYNCED,
+                            createdAt = System.currentTimeMillis(),
+                            deliveries = routeData.stops.map { stop ->
+                                Delivery(
+                                    id = UUID.randomUUID().toString(),
+                                    routeId = routeId,  // Use same routeId
+                                    facilityId = stop.facilityId,
+                                    facilityName = stop.facilityName,
+                                    latitude = stop.latitude,
+                                    longitude = stop.longitude,
+                                    orderVolume = stop.orderVolume,
+                                    orderWeight = stop.orderWeight,
+                                    stopNumber = stop.stopNumber,
+                                    distanceFromPrevious = stop.distanceFromPrevious,
+                                    status = DeliveryStatus.PENDING,
+                                    syncStatus = SyncStatus.SYNCED
+                                )
+                            }
+                        )
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to parse route from event")
+                        null
                     }
                 }
 
-                Timber.d("Fetched ${routes.size} routes from DHIS2")
+                // Save to local database
+                routes.forEach { route ->
+                    routeDao.insertRoute(route.toEntity())
+                    val deliveryEntities = route.deliveries.map { it.toEntity() }
+                    deliveryDao.insertDeliveries(deliveryEntities)
+                }
+
+                Timber.d("Fetched and saved ${routes.size} routes from DHIS2")
                 Result.success(routes)
             } else {
                 val error = "Failed to fetch routes: ${response.code()} ${response.message()}"

@@ -27,7 +27,18 @@ fun RoutesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("My Routes") },
+                title = {
+                    Column {
+                        Text("My Routes")
+                        uiState.driverProfile?.let { profile ->
+                            Text(
+                                text = "${profile.driverName} | ${profile.assignedTruckCode ?: profile.assignedTruckName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = onSyncClick) {
                         Icon(Icons.Default.Sync, contentDescription = "Sync")

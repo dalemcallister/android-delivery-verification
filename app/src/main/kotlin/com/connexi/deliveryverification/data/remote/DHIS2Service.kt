@@ -10,6 +10,11 @@ interface DHIS2Service {
     @GET("api/system/info")
     suspend fun getSystemInfo(): Response<SystemInfoDto>
 
+    @GET("api/me")
+    suspend fun getCurrentUser(
+        @Query("fields") fields: String = "id,username,firstName,surname,email,phoneNumber,organisationUnits[id,name,code],userCredentials[userRoles],attributeValues[attribute[id,code],value]"
+    ): Response<UserDto>
+
     @GET("api/programs")
     suspend fun getPrograms(
         @Query("fields") fields: String = "id,name,programType,programStages[id,name,programStageDataElements[dataElement[id,name,valueType]]]",
